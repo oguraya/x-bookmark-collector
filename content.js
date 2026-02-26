@@ -1,0 +1,323 @@
+(() => {
+  // State
+  let collectedUrls = new Map(); // url -> tweet data
+  let isCollecting = false;
+  let scrollInterval = null;
+  let noNewContentCount = 0;
+
+  // Extract media URLs from an article element (excluding quoted tweet area)
+  function extractMediaUrls(article, quoteContainer) {
+    const imageUrls = [];
+    let hasVideo = false;
+
+    if (!article) return { imageUrls, hasVideo };
+
+    // Collect quote-area image srcs to exclude later
+    const quoteImgSrcs = new Set();
+    if (quoteContainer) {
+      quoteContainer.querySelectorAll('img[src*="pbs.twimg.com/media"]').forEach(img => {
+        quoteImgSrcs.add(img.src);
+      });
+    }
+
+    // Images: pbs.twimg.com/media (skip those inside quote)
+    article.querySelectorAll('img[src*="pbs.twimg.com/media"]').forEach(img => {
+      if (quoteContainer && quoteContainer.contains(img)) return;
+      let src = img.src;
+      // Convert to original size
+      try {
+        const url = new URL(src);
+        url.searchParams.set('name', 'orig');
+        src = url.toString();
+      } catch {}
+      if (!imageUrls.includes(src)) {
+        imageUrls.push(src);
+      }
+    });
+
+    // Video / GIF detection (outside quote)
+    const checkVideo = el => {
+      if (quoteContainer && quoteContainer.contains(el)) return false;
+      return true;
+    };
+
+    const videos = article.querySelectorAll('video');
+    for (const v of videos) { if (checkVideo(v)) { hasVideo = true; break; } }
+
+    if (!hasVideo) {
+      const vc = article.querySelectorAll('[data-testid="videoComponent"], [data-testid="videoPlayer"]');
+      for (const v of vc) { if (checkVideo(v)) { hasVideo = true; break; } }
+    }
+
+    // GIF badge
+    if (!hasVideo) {
+      const gifs = article.querySelectorAll('[aria-label="GIF"]');
+      for (const g of gifs) { if (checkVideo(g)) { hasVideo = true; break; } }
+    }
+
+    return { imageUrls, hasVideo };
+  }
+
+  // Extract quoted tweet info
+  function extractQuotedTweet(article) {
+    const quoteContainer = article.querySelector('[data-testid="quoteTweet"]');
+    if (!quoteContainer) return null;
+
+    // Find the status link inside the quote
+    const links = quoteContainer.querySelectorAll('a[href*="/status/"]');
+    let quotedUrl = '';
+    let quotedAuthor = '';
+
+    for (const link of links) {
+      const match = link.getAttribute('href')?.match(/^\/([^/]+)\/status\/(\d+)$/);
+      if (match) {
+        quotedUrl = `https://x.com${link.getAttribute('href')}`;
+        quotedAuthor = match[1];
+        break;
+      }
+    }
+
+    // Quoted tweet text
+    let quotedText = '';
+    const quotedTextEl = quoteContainer.querySelector('[data-testid="tweetText"]');
+    if (quotedTextEl) {
+      quotedText = quotedTextEl.innerText?.substring(0, 200) || '';
+    }
+
+    if (!quotedUrl) return null;
+    return { quotedUrl, quotedAuthor, quotedText };
+  }
+
+  // Check for external links
+  function hasExternalLinks(article) {
+    if (!article) return false;
+    if (article.querySelector('[data-testid="card.wrapper"]')) return true;
+
+    const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
+    if (tweetTextEl) {
+      const links = tweetTextEl.querySelectorAll('a[href^="https://t.co/"]');
+      if (links.length > 0) return true;
+    }
+    return false;
+  }
+
+  // Determine tags
+  function determineTags(article, mediaInfo, hasQuote, extLinks) {
+    const tags = [];
+
+    if (mediaInfo.imageUrls.length > 0) tags.push('image');
+    if (mediaInfo.hasVideo) tags.push('video');
+    if (hasQuote) tags.push('quote');
+    if (extLinks) tags.push('link');
+
+    // Thread
+    const text = article?.innerText || '';
+    if (text.includes('このスレッドを表示') || text.includes('Show this thread')) {
+      tags.push('thread');
+    }
+
+    // Long text
+    if (article?.querySelector('[data-testid="tweet-text-show-more-link"]')) {
+      tags.push('long_text');
+    }
+
+    if (tags.length === 0) tags.push('text_only');
+    return tags;
+  }
+
+  // Main extraction
+  function extractTweetUrls() {
+    const articles = document.querySelectorAll('article[data-testid="tweet"]');
+    let newCount = 0;
+
+    articles.forEach(article => {
+      // Find permalink via time element
+      const timeEl = article.querySelector('time');
+      const timeLink = timeEl?.closest('a[href*="/status/"]');
+      if (!timeLink) return;
+
+      const href = timeLink.getAttribute('href');
+      const match = href?.match(/^\/([^/]+)\/status\/(\d+)$/);
+      if (!match) return;
+
+      const mainUrl = `https://x.com${href}`;
+      if (collectedUrls.has(mainUrl)) return;
+
+      const author = match[1];
+      const time = timeEl?.getAttribute('datetime') || '';
+
+      // Tweet text (exclude quoted tweet text)
+      const quoteContainer = article.querySelector('[data-testid="quoteTweet"]');
+      let text = '';
+      const tweetTextEls = article.querySelectorAll('[data-testid="tweetText"]');
+      for (const el of tweetTextEls) {
+        if (quoteContainer && quoteContainer.contains(el)) continue;
+        text = el.innerText?.substring(0, 200) || '';
+        break;
+      }
+
+      // Media (excluding quoted area)
+      const mediaInfo = extractMediaUrls(article, quoteContainer);
+
+      // Quoted tweet
+      const quoted = extractQuotedTweet(article);
+
+      // External links
+      const extLinks = hasExternalLinks(article);
+
+      // Tags
+      const tags = determineTags(article, mediaInfo, !!quoted, extLinks);
+
+      collectedUrls.set(mainUrl, {
+        author,
+        text,
+        time,
+        mediaUrls: mediaInfo.imageUrls.join(' '),
+        hasVideo: mediaInfo.hasVideo,
+        quotedUrl: quoted?.quotedUrl || '',
+        quotedAuthor: quoted?.quotedAuthor || '',
+        quotedText: quoted?.quotedText || '',
+        tags: tags.join(',')
+      });
+
+      newCount++;
+    });
+
+    return newCount;
+  }
+
+  // Generate TSV
+  function generateTsv() {
+    const header = [
+      'url', 'author', 'date', 'text',
+      'media_urls', 'has_video',
+      'quoted_url', 'quoted_author', 'quoted_text',
+      'tags'
+    ].join('\t');
+
+    const rows = [];
+    collectedUrls.forEach((info, url) => {
+      const clean = s => (s || '').replace(/[\t\n\r]/g, ' ');
+      rows.push([
+        url,
+        `@${info.author}`,
+        info.time,
+        clean(info.text),
+        info.mediaUrls,
+        info.hasVideo ? 'true' : 'false',
+        info.quotedUrl,
+        info.quotedAuthor ? `@${info.quotedAuthor}` : '',
+        clean(info.quotedText),
+        info.tags
+      ].join('\t'));
+    });
+
+    return header + '\n' + rows.join('\n');
+  }
+
+  // Download TSV file
+  function downloadTsv() {
+    if (collectedUrls.size === 0) return;
+    const tsv = generateTsv();
+    const blob = new Blob(['\uFEFF' + tsv], { type: 'text/tab-separated-values;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `x_bookmarks_${new Date().toISOString().slice(0, 10)}.tsv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Auto-scroll
+  function autoScroll() {
+    const prevHeight = document.documentElement.scrollHeight;
+    window.scrollBy(0, window.innerHeight * 0.8);
+
+    setTimeout(() => {
+      const newFound = extractTweetUrls();
+      const newHeight = document.documentElement.scrollHeight;
+
+      sendStatus();
+
+      if (newHeight === prevHeight && newFound === 0) {
+        noNewContentCount++;
+        if (noNewContentCount >= 3) {
+          stopCollecting();
+          downloadTsv(); // Auto-download on complete
+          sendMessage({ type: 'COLLECTION_COMPLETE', count: collectedUrls.size });
+        }
+      } else {
+        noNewContentCount = 0;
+      }
+    }, 1500);
+  }
+
+  function startCollecting() {
+    if (isCollecting) return;
+    isCollecting = true;
+    noNewContentCount = 0;
+
+    extractTweetUrls();
+    sendStatus();
+
+    scrollInterval = setInterval(autoScroll, 2500);
+  }
+
+  function stopCollecting() {
+    isCollecting = false;
+    if (scrollInterval) {
+      clearInterval(scrollInterval);
+      scrollInterval = null;
+    }
+  }
+
+  function sendStatus() {
+    sendMessage({
+      type: 'STATUS_UPDATE',
+      count: collectedUrls.size,
+      isCollecting
+    });
+  }
+
+  function sendMessage(msg) {
+    chrome.runtime.sendMessage(msg).catch(() => {});
+  }
+
+  // Listen for messages from popup
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    switch (msg.type) {
+      case 'START_COLLECTING':
+        startCollecting();
+        sendResponse({ ok: true });
+        break;
+      case 'STOP_COLLECTING':
+        stopCollecting();
+        sendResponse({ ok: true });
+        break;
+      case 'GET_STATUS':
+        sendResponse({
+          count: collectedUrls.size,
+          isCollecting,
+          isBookmarkPage: location.pathname.includes('/i/bookmarks')
+        });
+        break;
+      case 'GET_DATA':
+        sendResponse({ data: [...collectedUrls.entries()].map(([url, info]) => ({ url, ...info })) });
+        break;
+      case 'DOWNLOAD_TSV':
+        downloadTsv();
+        sendResponse({ ok: true });
+        break;
+      case 'CLEAR_DATA':
+        collectedUrls.clear();
+        sendResponse({ ok: true });
+        break;
+    }
+    return true;
+  });
+
+  extractTweetUrls();
+  console.log('[X Bookmark Collector] Ready');
+})();

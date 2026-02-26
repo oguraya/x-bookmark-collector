@@ -101,6 +101,11 @@ $('btnDownload').addEventListener('click', async () => {
   toast('TSVをダウンロードしました');
 });
 
+$('btnDownloadJson').addEventListener('click', async () => {
+  await sendToContent({ type: 'DOWNLOAD_JSON' });
+  toast('JSONをダウンロードしました');
+});
+
 $('btnClear').addEventListener('click', async () => {
   await sendToContent({ type: 'CLEAR_DATA' });
   updateUI({ isCollecting: false, count: 0 });

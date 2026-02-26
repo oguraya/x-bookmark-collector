@@ -12,6 +12,29 @@
   let scrollInterval = null;
   let noNewContentCount = 0;
 
+  // Persistence via chrome.storage.local
+  function saveToStorage() {
+    const data = Object.fromEntries(collectedUrls);
+    chrome.storage.local.set({ collectedBookmarks: data }).catch(e =>
+      console.debug('[X Bookmark Collector] storage save error:', e)
+    );
+  }
+
+  async function loadFromStorage() {
+    try {
+      const result = await chrome.storage.local.get('collectedBookmarks');
+      if (result.collectedBookmarks) {
+        for (const [url, info] of Object.entries(result.collectedBookmarks)) {
+          if (!collectedUrls.has(url)) {
+            collectedUrls.set(url, info);
+          }
+        }
+      }
+    } catch (e) {
+      console.debug('[X Bookmark Collector] storage load error:', e);
+    }
+  }
+
   // Extract media URLs from an article element (excluding quoted tweet area)
   function extractMediaUrls(article, quoteContainer) {
     const imageUrls = [];
@@ -190,6 +213,7 @@
       newCount++;
     });
 
+    if (newCount > 0) saveToStorage();
     return newCount;
   }
 
@@ -223,6 +247,41 @@
     return header + '\n' + rows.join('\n');
   }
 
+  // Generate JSON
+  function generateJson() {
+    const items = [];
+    collectedUrls.forEach((info, url) => {
+      items.push({
+        url,
+        author: `@${info.author}`,
+        date: info.time,
+        text: info.text,
+        media_urls: info.mediaUrls ? info.mediaUrls.split(' ') : [],
+        has_video: info.hasVideo,
+        quoted_url: info.quotedUrl || null,
+        quoted_author: info.quotedAuthor ? `@${info.quotedAuthor}` : null,
+        quoted_text: info.quotedText || null,
+        tags: info.tags ? info.tags.split(',') : []
+      });
+    });
+    return JSON.stringify(items, null, 2);
+  }
+
+  // Download JSON file
+  function downloadJson() {
+    if (collectedUrls.size === 0) return;
+    const json = generateJson();
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `x_bookmarks_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   // Download TSV file
   function downloadTsv() {
     if (collectedUrls.size === 0) return;
@@ -238,33 +297,53 @@
     URL.revokeObjectURL(url);
   }
 
+  // Expand "show more" links to get full tweet text
+  function expandShowMoreLinks() {
+    const links = document.querySelectorAll('[data-testid="tweet-text-show-more-link"]');
+    let clicked = 0;
+    links.forEach(link => {
+      if (!link.dataset.xbcExpanded) {
+        link.click();
+        link.dataset.xbcExpanded = '1';
+        clicked++;
+      }
+    });
+    return clicked;
+  }
+
   // Auto-scroll
   function autoScroll() {
     const prevHeight = document.documentElement.scrollHeight;
     window.scrollBy(0, window.innerHeight * SCROLL_RATIO);
 
     setTimeout(() => {
-      const newFound = extractTweetUrls();
-      const newHeight = document.documentElement.scrollHeight;
+      // Expand "show more" before extracting
+      const expanded = expandShowMoreLinks();
+      const extractDelay = expanded > 0 ? 500 : 0;
 
-      sendStatus();
+      setTimeout(() => {
+        const newFound = extractTweetUrls();
+        const newHeight = document.documentElement.scrollHeight;
 
-      if (newHeight === prevHeight && newFound === 0) {
-        noNewContentCount++;
-        if (noNewContentCount >= MAX_NO_CONTENT_COUNT) {
-          stopCollecting();
-          downloadTsv(); // Auto-download on complete
-          sendMessage({ type: 'COLLECTION_COMPLETE', count: collectedUrls.size });
-          return;
+        sendStatus();
+
+        if (newHeight === prevHeight && newFound === 0) {
+          noNewContentCount++;
+          if (noNewContentCount >= MAX_NO_CONTENT_COUNT) {
+            stopCollecting();
+            downloadTsv(); // Auto-download on complete
+            sendMessage({ type: 'COLLECTION_COMPLETE', count: collectedUrls.size });
+            return;
+          }
+        } else {
+          noNewContentCount = 0;
         }
-      } else {
-        noNewContentCount = 0;
-      }
 
-      // Schedule next scroll only if still collecting
-      if (isCollecting) {
-        scrollInterval = setTimeout(autoScroll, SCROLL_INTERVAL_MS);
-      }
+        // Schedule next scroll only if still collecting
+        if (isCollecting) {
+          scrollInterval = setTimeout(autoScroll, SCROLL_INTERVAL_MS);
+        }
+      }, extractDelay);
     }, SCROLL_WAIT_MS);
   }
 
@@ -324,14 +403,21 @@
         downloadTsv();
         sendResponse({ ok: true });
         break;
+      case 'DOWNLOAD_JSON':
+        downloadJson();
+        sendResponse({ ok: true });
+        break;
       case 'CLEAR_DATA':
         collectedUrls.clear();
+        saveToStorage();
         sendResponse({ ok: true });
         break;
     }
     return true;
   });
 
-  extractTweetUrls();
-  console.log('[X Bookmark Collector] Ready');
+  loadFromStorage().then(() => {
+    extractTweetUrls();
+    console.log('[X Bookmark Collector] Ready — restored', collectedUrls.size, 'items from storage');
+  });
 })();

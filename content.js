@@ -107,6 +107,17 @@
       }
     }
 
+    // Quoted author display name
+    let quotedDisplayName = '';
+    const quoteUserNameEl = quoteContainer.querySelector('[data-testid="User-Name"]');
+    if (quoteUserNameEl) {
+      const nameLink = quoteUserNameEl.querySelector('a[role="link"]');
+      if (nameLink) {
+        const nameSpan = nameLink.querySelector('span');
+        if (nameSpan) quotedDisplayName = nameSpan.innerText || '';
+      }
+    }
+
     // Quoted tweet text
     let quotedText = '';
     const quotedTextEl = quoteContainer.querySelector('[data-testid="tweetText"]');
@@ -115,7 +126,7 @@
     }
 
     if (!quotedUrl) return null;
-    return { quotedUrl, quotedAuthor, quotedText };
+    return { quotedUrl, quotedAuthor, quotedDisplayName, quotedText };
   }
 
   // Check for external links
@@ -176,6 +187,17 @@
       const author = match[1];
       const time = timeEl?.getAttribute('datetime') || '';
 
+      // Display name from User-Name container
+      let displayName = '';
+      const userNameEl = article.querySelector('[data-testid="User-Name"]');
+      if (userNameEl) {
+        const nameLink = userNameEl.querySelector('a[role="link"]');
+        if (nameLink) {
+          const nameSpan = nameLink.querySelector('span');
+          if (nameSpan) displayName = nameSpan.innerText || '';
+        }
+      }
+
       // Tweet text (exclude quoted tweet text)
       const quoteContainer = article.querySelector('[data-testid="quoteTweet"]');
       let text = '';
@@ -200,12 +222,14 @@
 
       collectedUrls.set(mainUrl, {
         author,
+        displayName,
         text,
         time,
         mediaUrls: mediaInfo.imageUrls.join(' '),
         hasVideo: mediaInfo.hasVideo,
         quotedUrl: quoted?.quotedUrl || '',
         quotedAuthor: quoted?.quotedAuthor || '',
+        quotedDisplayName: quoted?.quotedDisplayName || '',
         quotedText: quoted?.quotedText || '',
         tags: tags.join(',')
       });
@@ -222,9 +246,9 @@
   // Generate TSV
   function generateTsv() {
     const header = [
-      'url', 'author', 'date', 'text',
+      'url', 'author', 'display_name', 'date', 'text',
       'media_urls', 'has_video',
-      'quoted_url', 'quoted_author', 'quoted_text',
+      'quoted_url', 'quoted_author', 'quoted_display_name', 'quoted_text',
       'tags'
     ].join('\t');
 
@@ -233,12 +257,14 @@
       rows.push([
         url,
         `@${info.author}`,
+        clean(info.displayName),
         info.time,
         clean(info.text),
         info.mediaUrls,
         info.hasVideo ? 'true' : 'false',
         info.quotedUrl,
         info.quotedAuthor ? `@${info.quotedAuthor}` : '',
+        clean(info.quotedDisplayName),
         clean(info.quotedText),
         info.tags
       ].join('\t'));
@@ -254,12 +280,14 @@
       items.push({
         url,
         author: `@${info.author}`,
+        display_name: info.displayName || '',
         date: info.time,
         text: info.text,
         media_urls: info.mediaUrls ? info.mediaUrls.split(' ') : [],
         has_video: info.hasVideo,
         quoted_url: info.quotedUrl || null,
         quoted_author: info.quotedAuthor ? `@${info.quotedAuthor}` : null,
+        quoted_display_name: info.quotedDisplayName || null,
         quoted_text: info.quotedText || null,
         tags: info.tags ? info.tags.split(',') : []
       });

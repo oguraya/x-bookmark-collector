@@ -77,7 +77,7 @@ async function updatePreview() {
     const textPreview = item.text ? ' — ' + escapeHtml(item.text.substring(0, 50)) + '...' : '';
     return `<div class="preview-item">
       <span class="url">${escapeHtml(item.url)}</span> ${mediaIcon}${videoIcon}${quoteIcon}<br>
-      @${escapeHtml(item.author)}${textPreview}
+      ${item.displayName ? escapeHtml(item.displayName) + ' ' : ''}@${escapeHtml(item.author)}${textPreview}
       <br><span class="tags">${escapeHtml(item.tags)}</span>
     </div>`;
   }).join('');

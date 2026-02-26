@@ -1,12 +1,19 @@
 const $ = id => document.getElementById(id);
 
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 let currentTabId = null;
 
 async function sendToContent(msg) {
   if (!currentTabId) return null;
   try {
     return await chrome.tabs.sendMessage(currentTabId, msg);
-  } catch {
+  } catch (e) {
+    console.debug('[X Bookmark Collector] sendToContent error:', e);
     return null;
   }
 }
@@ -46,7 +53,7 @@ function updateTagSummary(data) {
 
   const sorted = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]);
   summary.innerHTML = sorted.map(([tag, count]) =>
-    `<span class="tag-badge">${tag}: ${count}</span>`
+    `<span class="tag-badge">${escapeHtml(tag)}: ${count}</span>`
   ).join('');
 }
 
@@ -67,10 +74,11 @@ async function updatePreview() {
     const mediaIcon = item.mediaUrls ? '🖼' : '';
     const videoIcon = item.hasVideo ? '🎬' : '';
     const quoteIcon = item.quotedUrl ? '💬' : '';
+    const textPreview = item.text ? ' — ' + escapeHtml(item.text.substring(0, 50)) + '...' : '';
     return `<div class="preview-item">
-      <span class="url">${item.url}</span> ${mediaIcon}${videoIcon}${quoteIcon}<br>
-      @${item.author}${item.text ? ' — ' + item.text.substring(0, 50) + '...' : ''}
-      <br><span class="tags">${item.tags}</span>
+      <span class="url">${escapeHtml(item.url)}</span> ${mediaIcon}${videoIcon}${quoteIcon}<br>
+      @${escapeHtml(item.author)}${textPreview}
+      <br><span class="tags">${escapeHtml(item.tags)}</span>
     </div>`;
   }).join('');
 }

@@ -3,7 +3,7 @@
   "name": "X Bookmark URL Collector",
   "version": "1.0.0",
   "description": "X（Twitter）のブックマークからツイートURLを収集します",
-  "permissions": ["activeTab", "storage"],
+  "permissions": ["activeTab"],
   "icons": {
     "48": "icon48.png",
     "128": "icon128.png"
@@ -17,7 +17,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/i/bookmarks*", "https://twitter.com/i/bookmarks*"],
+      "matches": ["https://x.com/i/bookmarks", "https://x.com/i/bookmarks/*", "https://twitter.com/i/bookmarks", "https://twitter.com/i/bookmarks/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
